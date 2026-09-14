@@ -21,10 +21,10 @@ Every provider maps to exactly one coverage level. The level dictates what the w
 
 | Level | Meaning | Example providers |
 | --- | --- | --- |
-| **Quota** | Real `usedPercent` + reset window from a protocol/API. | `codex`, `copilot`, `antigravity`, `openrouter`, `zai`, `glm`, `fireworks` (with account ID), `commandcode`, `opencode` (Zen mode) |
-| **Balance** | Remaining prepaid balance / credits in real currency. | `kimi`, `deepseek` |
+| **Quota** | Real `usedPercent` + reset window from a protocol/API. | `codex`, `copilot`, `antigravity`, `openrouter`, `zai`, `glm`, `fireworks` (with account ID), `commandcode`, `opencode` (Zen mode), `xai` (Grok CLI / SuperGrok) |
+| **Balance** | Remaining prepaid balance / credits in real currency. | `kimi`, `deepseek`, `xai` (Management API prepaid) |
 | **Analytics** | Consumption counters (requests/tokens/neurons/cost) with no remaining-quota value. | `cloudflare` (GraphQL), `9router`, `claude` (local), `pi` (local), `hermes` (local), `opencode` (local, default), `codex` (local, alongside its quota) |
-| **Auth / configured** | Validates credentials with a read-only endpoint when possible; otherwise reports only that a credential is configured and states the limitation. No usage numbers. | `gemini`, `mistral`, `nvidia`, `qwen`, `byteplus`, `groq`, `cohere`, `replicate`, `together`, `minimax`, `xai`, `kilo`, `ai21` |
+| **Auth / configured** | Validates credentials with a read-only endpoint when possible; otherwise reports only that a credential is configured and states the limitation. No usage numbers. | `gemini`, `mistral`, `nvidia`, `qwen`, `byteplus`, `groq`, `cohere`, `replicate`, `together`, `minimax`, `kilo`, `ai21` |
 | **Local runtime** | Local process / installed models. | `ollama`, `vertexai` (gcloud) |
 | **Informational** | No public read-only API at all; the card just links to the dashboard. | `perplexity`, `cursor`, `cline`, `kiro`, `warp`, `amp` |
 
@@ -223,12 +223,12 @@ The matrix below summarises the **authentication/billing surface** for every sup
 </tr>
 <tr>
 <td><code>xai</code></td>
-<td>Auth</td>
+<td>Quota / Balance / Auth</td>
 <td>✅ <code>GET /v1/api-key</code></td>
-<td>❌ dashboard-only (<code>usage.cost_in_usd_ticks</code> per request)</td>
-<td>⚠️ prepaid credits only</td>
-<td>✅ per token</td>
-<td><code>XAI_API_KEY</code></td>
+<td>✅ SuperGrok weekly/monthly via CLI billing; prepaid via Management API</td>
+<td>✅ SuperGrok / SuperGrok Heavy; API prepaid</td>
+<td>✅ per token (API)</td>
+<td><code>grok login</code>, <code>XAI_API_KEY</code>, <code>XAI_MANAGEMENT_KEY</code></td>
 <td><a href="https://console.x.ai/billing">console.x.ai/billing</a></td>
 <td><a href="https://docs.x.ai/">docs.x.ai</a></td>
 </tr>
@@ -663,16 +663,16 @@ force the Zen path.
 
 | | |
 | --- | --- |
-| **API base** | `https://api.x.ai/v1` (inference, OpenAI-compat). Key management: `https://management-api.x.ai` (separate, June 2025). |
-| **Env var** | `XAI_API_KEY`. |
-| **Auth** | `Authorization: Bearer <key>`. |
-| **Key check** | ✅ **`GET /v1/api-key`** → `200` returns key metadata: `{redacted_api_key, name, user_id, team_id, api_key_id, api_key_blocked, api_key_disabled, team_blocked, acls, create_time, modify_time}`. `401` without key. **This is the best validator** — it also surfaces blocked/disabled state. (`GET /v1/models` also works and returns per-token prices.) |
-| **Quota / balance** | ❌ No remaining-credits field on `/v1/api-key`. Account balance is dashboard-only. Per-request cost is in every response's `usage.cost_in_usd_ticks` (1 USD = 1e10 ticks) and `usage.cost_in_nano_usd` (Responses API); enable via `stream_options.include_usage:true`. |
-| **Plans** | API = prepaid credits (no named tiers). `service_tier:"default"` vs `"priority"` (2× billing, higher priority — June 2026). Consumer Grok subs (Free/SuperGrok/SuperGrok Heavy) are separate from `api.x.ai`. |
+| **API base** | Inference: `https://api.x.ai/v1`. Grok Build CLI billing: `https://cli-chat-proxy.grok.com/v1` (override `GROK_CLI_CHAT_PROXY_BASE_URL`). Management: `https://management-api.x.ai`. |
+| **Env var** | `grok login` writes `~/.grok/auth.json` (or `$GROK_HOME/auth.json`). Optional `XAI_API_KEY` (inference). Prepaid API credits: `XAI_MANAGEMENT_KEY` or `XAI_MANAGEMENT_API_KEY`, plus `XAI_TEAM_ID`. |
+| **Auth** | SuperGrok: `Authorization: Bearer <CLI token>` + `x-xai-token-auth: xai-grok-cli`. Inference / Management: `Authorization: Bearer <key>`. |
+| **Key check** | ✅ **`GET /v1/api-key`** for inference keys → `{redacted_api_key, name, user_id, team_id, api_key_id, api_key_blocked, api_key_disabled, team_blocked, acls, …}`. `401` without key; invalid keys often return HTTP 400 (`invalid-argument`). |
+| **Quota / balance** | ✅ SuperGrok / Grok Build: `GET {cli-proxy}/billing?format=credits` — `config.creditUsagePercent` (omitted percent on a valid `currentPeriod` is 0%), weekly/monthly window from `currentPeriod.type` / `.end`. Plan label from `{cli-proxy}/settings` → `subscription_tier_display`. ✅ API prepaid: `GET https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/balance` — `total.val` is an inverted USD-cent ledger (a $12.50 top-up is `"-1250"`). ❌ Inference `XAI_API_KEY` has no remaining-credits field. |
+| **Plans** | Consumer Grok subs (Free / SuperGrok / SuperGrok Heavy) are separate from `api.x.ai`. API = prepaid credits (no named tiers). `service_tier:"default"` vs `"priority"` (2× billing, higher priority — June 2026). |
 | **Billing** | Per 1M tokens: **`grok-4.3`** (flagship, 1M ctx) $1.25/$2.50 &middot; `grok-4.20-0309-{reasoning,non-reasoning,multi-agent}` $1.25/$2.50 &middot; **`grok-build-0.1`** (coding, aliases `grok-code-fast-1`, `grok-code-fast`, 256K ctx) $1.00/$2.00 (cache $0.20). Batch 20–50% off. Tools billed per 1k calls (web/x search $5, code exec $5, attachment $10). Image $0.02–$0.05/img; video $0.05–$0.08/sec. |
-| **Dashboard** | [console.x.ai](https://console.x.ai): keys `/team/default/api-keys`, billing `/billing`, models `/team/default/models`. Status: [status.x.ai](https://status.x.ai). |
+| **Dashboard** | [console.x.ai](https://console.x.ai): keys `/team/default/api-keys`, management keys, billing `/billing`, models `/team/default/models`. Status: [status.x.ai](https://status.x.ai). |
 | **Changelog** | 2026-06 Priority Processing + Files public URLs. 2026-05 **`grok-build-0.1`** coding model + Grok Build CLI + Context Compaction API + WebSocket Responses. 2026-04 `cost_in_usd_ticks` on every response. 2026-03 Grok 4.20 + Multi-agent. 2025-12 Voice Agent API GA. 2025-11 Grok 4.1 Fast + Files API GA + Remote MCP. 2025-10 agentic server-side tools GA. 2025-09 Responses API GA. 2025-07 Grok 4. **Anthropic-compat `/v1/messages` & `/v1/complete` deprecated**; `max_tokens` → `max_completion_tokens`. |
-| **Adapter** | `fetch_xai_native` — `GET /v1/api-key`; surfaces key name + blocked/disabled flags in the note. |
+| **Adapter** | `fetch_xai_native` — prefers Grok CLI billing, then Management API prepaid balance, then `GET /v1/api-key` auth-only. |
 
 ### Kilo (kilo.ai)
 

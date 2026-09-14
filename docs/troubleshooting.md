@@ -70,6 +70,19 @@ systemctl --user restart dms.service
 
 For Command Code specifically, `cmd login` is usually preferable: the plugin reads the CLI's protected `~/.commandcode/auth.json` credential when `COMMAND_CODE_API_KEY` is absent from DMS. The helper reports credential source names only, never secret values.
 
+## xAI / Grok shows "XAI_API_KEY is not set"
+
+You do not need an inference API key to see SuperGrok / Grok Build usage. Sign in with `grok login` so `~/.grok/auth.json` exists; the card reads that file (or `$GROK_HOME/auth.json`) the same way the CLI does. Graphical DMS sessions do not inherit shell exports, so `export XAI_API_KEY=…` in a terminal will not reach the widget until you import it into the user systemd environment — `grok login` avoids that.
+
+An `XAI_API_KEY` from [console.x.ai](https://console.x.ai/team/default/api-keys) only proves the key works. It cannot return remaining credits. Prepaid API balance needs a **Management** key (Settings → Management Keys), not an inference key:
+
+```bash
+export XAI_MANAGEMENT_KEY="xai-mgmt-..."
+export XAI_TEAM_ID="your-team-uuid"
+```
+
+The team ID is in the console URL and in the Grok CLI login (`team_id` in `auth.json`). Tokens in `auth.json` expire after about seven days; if the card says the login expired, run `grok login` again.
+
 ## Provider shows zero percent
 
 Zero can mean one of three things:

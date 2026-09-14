@@ -2416,12 +2416,238 @@ fetch_qwen_native() {
   json_error qwen dashscope-api "${http_status:-1}" provider "DashScope API key invalid (HTTP ${http_status:-0}). Quota visible at dashscope.console.aliyun.com only."
 }
 
-fetch_xai_native() {
-  local key="${XAI_API_KEY:-}"
-  if [ -z "$key" ]; then
-    json_error xai xai-api 2 provider "XAI_API_KEY is not set. Get your key at console.x.ai/team/default/api-keys"
+xai_grok_home() {
+  printf '%s' "${GROK_HOME:-$HOME/.grok}"
+}
+
+xai_cli_proxy_base() {
+  local base="${GROK_CLI_CHAT_PROXY_BASE_URL:-https://cli-chat-proxy.grok.com/v1}"
+  printf '%s' "${base%/}"
+}
+
+# Compact JSON for the preferred non-expired Grok CLI login, or empty.
+# Prefers SuperGrok OIDC entries (https://auth.x.ai::…) over the legacy
+# accounts.x.ai session. Never prints the bearer token to stderr.
+xai_grok_auth_json() {
+  local auth_file
+  auth_file="$(xai_grok_home)/auth.json"
+  [ -r "$auth_file" ] || return 0
+  jq -c '
+    def parse_ts($s):
+      if ($s | type) != "string" or $s == "" then 0
+      else ($s | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch 0)
+      end;
+    def usable($v):
+      ($v.key | type) == "string" and ($v.key | length) > 0
+      and (
+        if ($v.expires_at // "") == "" then true
+        else (parse_ts($v.expires_at) as $t | if $t == 0 then true else $t > now end)
+        end
+      );
+    to_entries
+    | map(select(usable(.value)))
+    | sort_by(if (.key | startswith("https://auth.x.ai")) then 0 else 1 end)
+    | .[0].value // empty
+  ' "$auth_file" 2>/dev/null || true
+}
+
+xai_grok_has_auth_file() {
+  local auth_file
+  auth_file="$(xai_grok_home)/auth.json"
+  [ -r "$auth_file" ] \
+    && jq -e 'to_entries | any((.value.key | type) == "string" and (.value.key | length) > 0)' \
+      "$auth_file" >/dev/null 2>&1
+}
+
+xai_management_key() {
+  if [ -n "${XAI_MANAGEMENT_KEY:-}" ]; then
+    printf '%s' "$XAI_MANAGEMENT_KEY"
+  elif [ -n "${XAI_MANAGEMENT_API_KEY:-}" ]; then
+    printf '%s' "$XAI_MANAGEMENT_API_KEY"
+  fi
+}
+
+# SuperGrok / Grok Build weekly (or monthly) usage via the CLI chat-proxy
+# billing API that `grok login` already uses. Returns 0 if JSON was printed,
+# 1 to try the next credential source.
+fetch_xai_cli_billing() {
+  local auth_json="$1"
+  local token email auth_mode
+  token="$(printf '%s' "$auth_json" | jq -r '.key // empty' 2>/dev/null || true)"
+  [ -n "$token" ] || return 1
+  email="$(printf '%s' "$auth_json" | jq -r '.email // "Grok account"' 2>/dev/null || printf 'Grok account')"
+  auth_mode="$(printf '%s' "$auth_json" | jq -r '.auth_mode // "grok-login"' 2>/dev/null || printf 'grok-login')"
+
+  local tmp_body tmp_settings http_status proxy
+  tmp_body="$(mktemp)"
+  tmp_settings="$(mktemp)"
+  proxy="$(xai_cli_proxy_base)"
+  http_status="$(curl -sS --max-time 8 -o "$tmp_body" -w '%{http_code}' \
+    -H "Authorization: Bearer ${token}" \
+    -H "x-xai-token-auth: xai-grok-cli" \
+    -H "Accept: application/json" \
+    "${proxy}/billing?format=credits" 2>/dev/null || true)"
+
+  if [ "$http_status" != "200" ]; then
+    rm -f "$tmp_body" "$tmp_settings"
+    return 1
+  fi
+
+  # A parseable current period (even without creditUsagePercent) is a real
+  # quota window — grok 1.0.0 omitted the percent field and later restored
+  # it; an omitted percent on a valid period is zero usage, not missing data.
+  if ! jq -e '.config.currentPeriod.type' "$tmp_body" >/dev/null 2>&1; then
+    rm -f "$tmp_body" "$tmp_settings"
+    return 1
+  fi
+
+  curl -sS --max-time 4 -o "$tmp_settings" \
+    -H "Authorization: Bearer ${token}" \
+    -H "x-xai-token-auth: xai-grok-cli" \
+    -H "Accept: application/json" \
+    "${proxy}/settings" 2>/dev/null || printf '' >"$tmp_settings"
+
+  jq -c --arg email "$email" --arg auth_mode "$auth_mode" --slurpfile settings "$tmp_settings" '
+    def num($v):
+      if $v == null then null
+      elif ($v | type) == "object" then ($v.val | tonumber? // null)
+      else ($v | tonumber? // null)
+      end;
+    def clamp($n): if $n < 0 then 0 elif $n > 100 then 100 else $n end;
+    def absn($n): if $n < 0 then -$n else $n end;
+    def money_cents($cents):
+      if $cents == null then null
+      else
+        (absn($cents | floor) as $abs | (($abs / 100) | floor) as $d | ($abs % 100) as $f
+         | "$" + ($d | tostring) + "." + (if $f < 10 then "0" else "" end) + ($f | tostring))
+      end;
+    def period_minutes($type):
+      if ($type | test("WEEKLY")) then 10080
+      elif ($type | test("MONTHLY")) then 43200
+      else null end;
+    def period_label($type):
+      if ($type | test("WEEKLY")) then "Weekly"
+      elif ($type | test("MONTHLY")) then "Monthly"
+      else "Credits" end;
+    .config as $c |
+    ($c.currentPeriod.type // "") as $ptype |
+    (
+      if ($c.creditUsagePercent | type) == "number" then $c.creditUsagePercent
+      elif (num($c.onDemandCap) // 0) > 0 then
+        ((num($c.onDemandUsed) // 0) / num($c.onDemandCap) * 100)
+      else 0
+      end
+    ) as $pct |
+    ($settings[0].subscription_tier_display // empty) as $tier |
+    (if $tier != "" then $tier
+     elif $auth_mode == "oidc" then "SuperGrok"
+     else $auth_mode end) as $plan |
+    (num($c.prepaidBalance) // 0) as $prepaid |
+    {
+      provider: "xai",
+      source: "grok-cli-billing",
+      usage: {
+        identity: {providerID: "xai", accountEmail: $email, loginMethod: $plan},
+        accountEmail: $email,
+        loginMethod: $plan,
+        primary: {
+          usedPercent: clamp($pct),
+          windowMinutes: period_minutes($ptype),
+          resetsAt: ($c.currentPeriod.end // $c.billingPeriodEnd // null),
+          resetDescription: period_label($ptype)
+        },
+        secondary: null,
+        tertiary: null,
+        updatedAt: (now | todateiso8601)
+      },
+      credits: {
+        remaining: (if $prepaid != 0 then money_cents($prepaid) else $plan end)
+      }
+    }
+  ' "$tmp_body"
+  rm -f "$tmp_body" "$tmp_settings"
+  return 0
+}
+
+# Documented Management API prepaid ledger. Inference keys never work here.
+# Remaining dollars = negated total.val (USD cents). Returns 0 if JSON was
+# printed, 1 to try the next source.
+fetch_xai_management_balance() {
+  local grok_auth="${1:-}"
+  local key team
+  key="$(xai_management_key)"
+  [ -n "$key" ] || return 1
+  team="${XAI_TEAM_ID:-}"
+  if [ -z "$team" ] && [ -n "$grok_auth" ]; then
+    team="$(printf '%s' "$grok_auth" | jq -r '.team_id // empty' 2>/dev/null || true)"
+  fi
+  [ -n "$team" ] || return 1
+
+  local tmp_body http_status
+  tmp_body="$(mktemp)"
+  http_status="$(curl -sS --max-time 8 -o "$tmp_body" -w '%{http_code}' \
+    -H "Authorization: Bearer ${key}" \
+    -H "Accept: application/json" \
+    "https://management-api.x.ai/v1/billing/teams/${team}/prepaid/balance" 2>/dev/null || true)"
+
+  if [ "$http_status" = "401" ] || [ "$http_status" = "403" ]; then
+    if [ -n "${XAI_API_KEY:-}" ]; then
+      rm -f "$tmp_body"
+      return 1
+    fi
+    rm -f "$tmp_body"
+    json_error xai xai-management "$http_status" provider \
+      "xAI Management API key rejected (HTTP ${http_status}). Create a Management key (not an inference key) at console.x.ai."
     return 0
   fi
+
+  if [ "$http_status" != "200" ] || ! jq -e '.total.val' "$tmp_body" >/dev/null 2>&1; then
+    rm -f "$tmp_body"
+    return 1
+  fi
+
+  local out
+  out="$(jq -c --arg team "$team" '
+    def absn($n): if $n < 0 then -$n else $n end;
+    def money_cents($cents):
+      (absn($cents | floor) as $abs | (($abs / 100) | floor) as $d | ($abs % 100) as $f
+       | "$" + ($d | tostring) + "." + (if $f < 10 then "0" else "" end) + ($f | tostring));
+    (.total.val | tonumber? // null) as $raw |
+    if $raw == null then empty
+    else
+      (-$raw) as $remaining_cents |
+      (if $remaining_cents < 0 then 0 else $remaining_cents end) as $clamped |
+      {
+        provider: "xai",
+        source: "xai-management",
+        usage: {
+          identity: {providerID: "xai", accountEmail: ("xAI team " + $team), loginMethod: "management-key"},
+          accountEmail: ("xAI team " + $team),
+          loginMethod: "management-key",
+          primary: {
+            usedPercent: 0,
+            windowMinutes: null,
+            resetsAt: null,
+            resetDescription: "Prepaid credits",
+            displayValue: money_cents($clamped)
+          },
+          secondary: null,
+          tertiary: null,
+          updatedAt: (now | todateiso8601)
+        },
+        credits: {remaining: money_cents($clamped)}
+      }
+    end
+  ' "$tmp_body" 2>/dev/null || true)"
+  rm -f "$tmp_body"
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+  return 0
+}
+
+fetch_xai_api_key_status() {
+  local key="${XAI_API_KEY:-}"
+  [ -n "$key" ] || return 1
   local tmp_body http_status
   tmp_body="$(mktemp)"
   # GET /v1/api-key is the documented zero-cost key introspection endpoint. It
@@ -2441,7 +2667,7 @@ fetch_xai_native() {
       json_error xai xai-api 3 provider "xAI API key \"${name}\" is blocked or disabled. Manage at console.x.ai/team/default/api-keys"
       return 0
     fi
-    note="Authenticated as \"${name}\" — billing at console.x.ai/billing"
+    note="Authenticated as \"${name}\" — billing at console.x.ai/billing. SuperGrok usage needs grok login; API prepaid credits need XAI_MANAGEMENT_KEY."
     json_note_usage xai xai-api "$name" "api-key" "$note" "console.x.ai/billing"
     return 0
   fi
@@ -2449,7 +2675,7 @@ fetch_xai_native() {
   # (not 401), plus 401/403 for auth/permission issues. All are key problems.
   case "$http_status" in 400|401|403)
     local message
-    message="$(jq -r '.error // .message // empty' "$tmp_body" 2>/dev/null || true)"
+    message="$(jq -r 'if (.error | type) == "string" then .error elif (.error.message // "") != "" then .error.message else .message // empty end' "$tmp_body" 2>/dev/null || true)"
     [ -n "$message" ] || message="xAI API key invalid (HTTP ${http_status})."
     rm -f "$tmp_body"
     json_error xai xai-api "${http_status}" provider "$message"
@@ -2457,6 +2683,37 @@ fetch_xai_native() {
   esac
   rm -f "$tmp_body"
   json_note_usage xai xai-api "xAI account" "api-key" "API key set; billing at console.x.ai/billing" "console.x.ai/billing"
+  return 0
+}
+
+fetch_xai_native() {
+  # SuperGrok / Grok Build usage (grok login) is the desktop default. The
+  # inference XAI_API_KEY cannot read remaining credits. Prepaid API credits
+  # need a separate Management key.
+  local grok_auth
+  grok_auth="$(xai_grok_auth_json)"
+  if [ -n "$grok_auth" ] && fetch_xai_cli_billing "$grok_auth"; then
+    return 0
+  fi
+  if fetch_xai_management_balance "$grok_auth"; then
+    return 0
+  fi
+  if [ -n "${XAI_API_KEY:-}" ]; then
+    fetch_xai_api_key_status
+    return 0
+  fi
+  if [ -n "$grok_auth" ]; then
+    json_error xai grok-cli-billing 1 provider \
+      "Grok login found but the CLI billing API was unavailable. Retry, or set XAI_API_KEY / XAI_MANAGEMENT_KEY."
+    return 0
+  fi
+  if xai_grok_has_auth_file; then
+    json_error xai grok-cli-billing 2 provider \
+      "Grok login expired. Run grok login, or set XAI_API_KEY."
+    return 0
+  fi
+  json_error xai xai-api 2 provider \
+    "No xAI credentials found. Sign in with grok login, or set XAI_API_KEY. Remaining API credits need XAI_MANAGEMENT_KEY and XAI_TEAM_ID from console.x.ai."
 }
 
 fetch_kilo_native() {

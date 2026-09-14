@@ -529,6 +529,9 @@ jobs:
       - name: Integration test — Command Code quota windows and fallback
         run: tests/test-commandcode.sh
 
+      - name: Integration test — xAI Grok CLI billing and Management API
+        run: tests/test-xai.sh
+
       - name: Integration test — quota notification deduplication
         run: tests/test-quota-alert.sh
 

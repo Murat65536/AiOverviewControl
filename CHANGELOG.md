@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### xAI (Grok) usage from grok login and the Management API
+
+- The xAI card no longer requires `XAI_API_KEY` when Grok Build is already signed in. `grok login` credentials in `~/.grok/auth.json` (or `$GROK_HOME`) drive the CLI billing API (`GET …/billing?format=credits`) and show SuperGrok weekly or monthly usage, including the documented case where `creditUsagePercent` is omitted on a valid period (treated as 0%, not missing). An inference key still cannot read remaining credits.
+- Prepaid API credits use the documented Management API (`GET /v1/billing/teams/{team_id}/prepaid/balance`) when `XAI_MANAGEMENT_KEY` (or `XAI_MANAGEMENT_API_KEY`) and `XAI_TEAM_ID` are set. `XAI_API_KEY` remains an auth-only fallback.
+
 ## 1.15.1 - 2026-09-08
 
 ### Codex usage polls no longer spawn overlapping app-servers (#25)

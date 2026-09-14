@@ -24,6 +24,13 @@ has_opencode_credentials() {
     && jq -e '((."opencode".key // ."opencode-go".key // ."opencode_go".key // .apiKey) | type) == "string" and (length > 0)' "$auth_file" >/dev/null 2>&1
 }
 
+has_xai_credentials() {
+  local auth_file="${GROK_HOME:-$HOME/.grok}/auth.json"
+  has_any_env XAI_API_KEY XAI_MANAGEMENT_KEY XAI_MANAGEMENT_API_KEY && return 0
+  [ -r "$auth_file" ] \
+    && jq -e 'to_entries | any((.value.key | type) == "string" and (.value.key | length) > 0)' "$auth_file" >/dev/null 2>&1
+}
+
 status_for() {
   local provider="$1"
   local status="ready"
@@ -69,7 +76,7 @@ status_for() {
     cohere) has_any_env COHERE_API_KEY || { status="missing"; detail="COHERE_API_KEY"; } ;;
     replicate) has_any_env REPLICATE_API_TOKEN || { status="missing"; detail="REPLICATE_API_TOKEN"; } ;;
     fireworks) has_any_env FIREWORKS_API_KEY || { status="missing"; detail="FIREWORKS_API_KEY"; } ;;
-    xai|grok) has_any_env XAI_API_KEY || { status="missing"; detail="XAI_API_KEY"; } ;;
+    xai|grok) has_xai_credentials || { status="missing"; detail="grok login, XAI_API_KEY, or XAI_MANAGEMENT_KEY"; } ;;
     kilo) has_any_env KILO_API_KEY || { status="missing"; detail="KILO_API_KEY"; } ;;
     ai21) has_any_env AI21_API_KEY || { status="missing"; detail="AI21_API_KEY"; } ;;
     pi) command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi/agent/sessions" ] || { status="missing"; detail="pi CLI or ~/.pi/agent/sessions"; } ;;
