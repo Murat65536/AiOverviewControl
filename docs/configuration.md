@@ -83,7 +83,7 @@ The settings health check describes whether the plugin can run an adapter in the
 | OpenRouter | `OPENROUTER_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Kimi | Balance: `MOONSHOT_API_KEY` or `KIMI_API_KEY` (optional `MOONSHOT_API_BASE`). Kimi Code subscription quota: `KIMI_CODING_API_KEY` (or a `sk-kimi-` prefixed `KIMI_API_KEY`; optional `KIMI_BASE_URL`) |
-| MiniMax | `MINIMAX_TOKEN_PLAN_KEY` (Token Plan Subscription Key, `sk-cp-...`) — backward-compatible: a `sk-cp-` value in `MINIMAX_API_KEY` is also recognised. PAYG `sk-api-` keys stay on `MINIMAX_API_KEY` and surface auth-only. |
+| MiniMax | `MINIMAX_TOKEN_PLAN_KEY` (Token Plan Subscription Key, `sk-cp-...`) — backward-compatible: a `sk-cp-` value in `MINIMAX_API_KEY` is also recognised. PAYG `sk-api-` keys stay on `MINIMAX_API_KEY` and surface auth-only; set both to keep an auth-only card when the Token Plan endpoint is unreachable. Optional `MINIMAX_API_BASE` retargets both read-only endpoints at a gateway or mirror. |
 | Command Code | `COMMAND_CODE_API_KEY`, or the `apiKey` saved by `cmd login` in `~/.commandcode/auth.json` |
 | GLM / Z.ai | `ZAI_API_KEY`, `GLM_API_KEY`, or `ZHIPU_API_KEY`; optional `GLM_API_BASE` |
 | Mistral | `MISTRAL_API_KEY` |

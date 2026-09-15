@@ -529,6 +529,9 @@ jobs:
       - name: Integration test — Command Code quota windows and fallback
         run: tests/test-commandcode.sh
 
+      - name: Integration test — MiniMax Token Plan routing and quota fixtures
+        run: tests/test-minimax-token-plan.sh
+
       - name: Integration test — quota notification deduplication
         run: tests/test-quota-alert.sh
 
