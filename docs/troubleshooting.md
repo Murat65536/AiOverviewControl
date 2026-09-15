@@ -81,7 +81,9 @@ export XAI_MANAGEMENT_KEY="xai-mgmt-..."
 export XAI_TEAM_ID="your-team-uuid"
 ```
 
-The team ID is in the console URL and in the Grok CLI login (`team_id` in `auth.json`). Tokens in `auth.json` expire after about seven days; if the card says the login expired, run `grok login` again.
+The team ID is in the console URL and in the Grok CLI login (`team_id` in `auth.json`). Grok OIDC access tokens currently expire after about six hours. If `auth.json` has a refresh token, the card runs the installed `grok models` command to renew the session silently, then retries billing once. It checks `PATH`, `$GROK_HOME/bin/grok`, `~/.grok/bin/grok`, and `~/.local/bin/grok`. If automatic renewal fails, run `grok login` again.
+
+A temporary billing timeout or server failure does not trigger token renewal. The card reports that failure separately so an xAI outage is not mistaken for a bad login.
 
 ## Provider shows zero percent
 

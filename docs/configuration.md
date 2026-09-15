@@ -101,7 +101,7 @@ The settings health check describes whether the plugin can run an adapter in the
 | Replicate | `REPLICATE_API_TOKEN` |
 | Fireworks | `FIREWORKS_API_KEY`; optional `FIREWORKS_ACCOUNT_ID` enables quota data |
 | AI21 | `AI21_API_KEY` |
-| xAI | `grok login` (`~/.grok/auth.json` or `$GROK_HOME`) for SuperGrok usage. Optional `XAI_API_KEY` (inference auth-only). Prepaid API credits: `XAI_MANAGEMENT_KEY` or `XAI_MANAGEMENT_API_KEY`, plus `XAI_TEAM_ID`. Optional `GROK_CLI_CHAT_PROXY_BASE_URL` |
+| xAI | `grok login` (`~/.grok/auth.json` or `$GROK_HOME`) for SuperGrok usage. Keep the Grok CLI installed so the adapter can renew its short-lived OIDC access token. Optional `XAI_API_KEY` (inference auth-only). Prepaid API credits: `XAI_MANAGEMENT_KEY` or `XAI_MANAGEMENT_API_KEY`, plus `XAI_TEAM_ID`. Optional `GROK_CLI_CHAT_PROXY_BASE_URL` |
 | Kilo | `KILO_API_KEY` |
 
 ## Health indicators

@@ -24,11 +24,41 @@ has_opencode_credentials() {
     && jq -e '((."opencode".key // ."opencode-go".key // ."opencode_go".key // .apiKey) | type) == "string" and (length > 0)' "$auth_file" >/dev/null 2>&1
 }
 
+has_grok_cli() {
+  local grok_home="${GROK_HOME:-$HOME/.grok}" candidate
+  command -v grok >/dev/null 2>&1 && return 0
+  for candidate in "$grok_home/bin/grok" "$HOME/.grok/bin/grok" "$HOME/.local/bin/grok"; do
+    [ -x "$candidate" ] && return 0
+  done
+  return 1
+}
+
 has_xai_credentials() {
   local auth_file="${GROK_HOME:-$HOME/.grok}/auth.json"
   has_any_env XAI_API_KEY XAI_MANAGEMENT_KEY XAI_MANAGEMENT_API_KEY && return 0
-  [ -r "$auth_file" ] \
-    && jq -e 'to_entries | any((.value.key | type) == "string" and (.value.key | length) > 0)' "$auth_file" >/dev/null 2>&1
+  [ -r "$auth_file" ] || return 1
+
+  # Missing or unparseable expiries remain usable until the server rejects
+  # them. Known-expired entries are ready only when Grok can renew them.
+  if jq -e '
+      def parse_ts($s):
+        if ($s | type) != "string" or $s == "" then 0
+        else ($s | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch 0)
+        end;
+      to_entries | any(
+        (.value.key | type) == "string" and (.value.key | length) > 0
+        and ((.value.expires_at // "") as $expiry
+          | $expiry == "" or (parse_ts($expiry) as $ts | $ts == 0 or $ts > now))
+      )
+    ' "$auth_file" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  has_grok_cli \
+    && jq -e 'to_entries | any(
+      (.value.key | type) == "string" and (.value.key | length) > 0
+      and (.value.refresh_token | type) == "string" and (.value.refresh_token | length) > 0
+    )' "$auth_file" >/dev/null 2>&1
 }
 
 status_for() {
