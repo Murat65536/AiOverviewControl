@@ -1456,12 +1456,213 @@ fetch_kimi_native() {
   rm -f "$tmp_body"
 }
 
-fetch_minimax_native() {
-  local key="${MINIMAX_API_KEY:-}"
-  if [ -z "$key" ]; then
-    json_error minimax minimax-api 2 provider "MINIMAX_API_KEY is not set."
+fetch_minimax_token_plan_native() {
+  # MiniMax "Token Plan" subscription quota endpoint (read-only).
+  #
+  # Two distinct credentials co-exist on MiniMax:
+  #   - pay-as-you-go "API Key"           (sk-api-...)  — covers /v1/models auth
+  #   - "Token Plan Subscription Key"     (sk-cp-...)   — covers quota windows
+  #
+  # This helper handles the Token Plan path. The official MiniMax CLI uses the
+  # same /v1/token_plan/remains endpoint and the same `general` bucket for both
+  # the 5h rolling interval and the weekly window.
+  local key="$1"
+  local tmp_body http_status message api_status
+
+  tmp_body="$(mktemp)"
+  http_status="$(curl -sS --max-time 8 -o "$tmp_body" -w '%{http_code}' \
+    -H "Authorization: Bearer ${key}" \
+    -H "Accept: application/json" \
+    "https://api.minimax.io/v1/token_plan/remains" 2>/dev/null || true)"
+
+  if [ "$http_status" != "200" ]; then
+    message="$(jq -r \
+      '.base_resp.status_msg // .error.message // .message // empty' \
+      "$tmp_body" 2>/dev/null || true)"
+    [ -n "$message" ] || \
+      message="MiniMax Token Plan quota API returned HTTP ${http_status:-0}."
+
+    rm -f "$tmp_body"
+    json_error minimax minimax-token-plan \
+      "${http_status:-1}" provider "$message"
     return 0
   fi
+
+  api_status="$(jq -r '.base_resp.status_code // 0' \
+    "$tmp_body" 2>/dev/null || printf '1')"
+
+  if [ "$api_status" != "0" ] || \
+     ! jq -e '.model_remains | type == "array" and length > 0' \
+       "$tmp_body" >/dev/null 2>&1; then
+    message="$(jq -r \
+      '.base_resp.status_msg // .error.message // .message // empty' \
+      "$tmp_body" 2>/dev/null || true)"
+    [ -n "$message" ] || \
+      message="MiniMax Token Plan quota response did not contain model_remains."
+
+    rm -f "$tmp_body"
+    json_error minimax minimax-token-plan \
+      "${api_status:-1}" provider "$message"
+    return 0
+  fi
+
+  if ! out="$(jq -c '
+    def clamp($n):
+      if $n < 0 then 0
+      elif $n > 100 then 100
+      else $n
+      end;
+
+    def num($v):
+      ($v | tonumber?);
+
+    def reset_iso($v):
+      num($v) as $n
+      | if $n != null and $n > 0
+        then (($n / 1000) | todateiso8601)
+        else null
+        end;
+
+    def remaining($m; $pct_key; $total_key; $usage_key):
+      num($m[$pct_key]) as $reported
+      | num($m[$total_key]) as $total
+      | num($m[$usage_key]) as $used
+      | if $reported != null then
+          clamp($reported)
+        elif $total != null and $total > 0 and $used != null then
+          clamp((($total - $used) / $total) * 100)
+        else
+          null
+        end;
+
+    def window(
+      $m;
+      $pct_key;
+      $total_key;
+      $usage_key;
+      $status_key;
+      $reset_key;
+      $minutes
+    ):
+      remaining($m; $pct_key; $total_key; $usage_key) as $left
+      | num($m[$status_key]) as $status
+      | if $status == 2 then {
+          usedPercent: 100,
+          windowMinutes: $minutes,
+          resetsAt: reset_iso($m[$reset_key]),
+          resetDescription: null
+        }
+        elif $status == 3 then {
+          usedPercent: 0,
+          windowMinutes: $minutes,
+          resetsAt: reset_iso($m[$reset_key]),
+          resetDescription: null,
+          displayValue: "Unlimited"
+        }
+        elif $left != null then {
+          usedPercent: clamp(100 - $left),
+          windowMinutes: $minutes,
+          resetsAt: reset_iso($m[$reset_key]),
+          resetDescription: null
+        }
+        else
+          null
+        end;
+
+    def unavailable($m):
+      (($m.current_interval_total_count // 0) == 0)
+      and (($m.current_weekly_total_count // 0) == 0)
+      and (($m.current_interval_status    // 0) == 3)
+      and (($m.current_weekly_status       // 0) == 3);
+
+    (
+      [.model_remains[]
+        | select(.model_name == "general")
+        | select(unavailable(.) | not)
+      ][0]
+      //
+      [.model_remains[]
+        | select(unavailable(.) | not)
+      ][0]
+    ) as $m
+
+    | if $m == null then
+        error("MiniMax Token Plan has no usable quota bucket")
+      else
+        {
+          provider: "minimax",
+          source: "minimax-token-plan",
+          usage: {
+            identity: {
+              providerID: "minimax",
+              accountEmail: "MiniMax Token Plan",
+              loginMethod: "subscription-key"
+            },
+            accountEmail: "MiniMax Token Plan",
+            loginMethod: "subscription-key",
+            primary: window(
+              $m;
+              "current_interval_remaining_percent";
+              "current_interval_total_count";
+              "current_interval_usage_count";
+              "current_interval_status";
+              "end_time";
+              300
+            ),
+            secondary: window(
+              $m;
+              "current_weekly_remaining_percent";
+              "current_weekly_total_count";
+              "current_weekly_usage_count";
+              "current_weekly_status";
+              "weekly_end_time";
+              10080
+            ),
+            tertiary: null,
+            updatedAt: (now | todateiso8601)
+          },
+          credits: {
+            remaining: "Token Plan"
+          }
+        }
+      end
+  ' "$tmp_body" 2>/dev/null)"; then
+    rm -f "$tmp_body"
+    json_error minimax minimax-token-plan 1 provider \
+      "MiniMax Token Plan response contained no usable quota window."
+    return 0
+  fi
+
+  printf '%s' "$out"
+  rm -f "$tmp_body"
+}
+
+fetch_minimax_native() {
+  # MiniMax credentials resolve one of three ways, in priority order:
+  #   1. MINIMAX_TOKEN_PLAN_KEY — dedicated Token Plan Subscription Key.
+  #   2. MINIMAX_API_KEY starting with sk-cp- — back-compat: an older config
+  #      that only knew about a single MiniMax key still gets quota windows.
+  #   3. MINIMAX_API_KEY — pay-as-you-go (sk-api-...), auth-only via /v1/models.
+  local token_plan_key="${MINIMAX_TOKEN_PLAN_KEY:-}"
+  local key="${MINIMAX_API_KEY:-}"
+
+  if [ -z "$token_plan_key" ]; then
+    case "$key" in
+      sk-cp-*) token_plan_key="$key" ;;
+    esac
+  fi
+
+  if [ -n "$token_plan_key" ]; then
+    fetch_minimax_token_plan_native "$token_plan_key"
+    return 0
+  fi
+
+  if [ -z "$key" ]; then
+    json_error minimax minimax-api 2 provider \
+      "MINIMAX_API_KEY or MINIMAX_TOKEN_PLAN_KEY is not set."
+    return 0
+  fi
+
   # OpenAI-compatible models list — read-only, consumes no tokens. Mirrors the
   # MiniMax M3/M2.x catalog and doubles as a key-validity check.
   local tmp_body http_status
@@ -1470,8 +1671,9 @@ fetch_minimax_native() {
     -H "Authorization: Bearer ${key}" \
     -H "Accept: application/json" \
     "https://api.minimax.io/v1/models" 2>/dev/null || true)"
+  rm -f "$tmp_body"
+
   if [ "$http_status" = "200" ]; then
-    rm -f "$tmp_body"
     json_note_usage minimax minimax-api "MiniMax account" "api-key" "Authenticated — balance at platform.minimax.io/user-center/payment/balance" "platform.minimax.io"
     return 0
   fi

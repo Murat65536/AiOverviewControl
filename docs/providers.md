@@ -21,10 +21,10 @@ Every provider maps to exactly one coverage level. The level dictates what the w
 
 | Level | Meaning | Example providers |
 | --- | --- | --- |
-| **Quota** | Real `usedPercent` + reset window from a protocol/API. | `codex`, `copilot`, `antigravity`, `openrouter`, `zai`, `glm`, `fireworks` (with account ID), `commandcode`, `opencode` (Zen mode) |
+| **Quota** | Real `usedPercent` + reset window from a protocol/API. | `codex`, `copilot`, `antigravity`, `openrouter`, `zai`, `glm`, `fireworks` (with account ID), `commandcode`, `opencode` (Zen mode), `minimax` (Token Plan Subscription Key) |
 | **Balance** | Remaining prepaid balance / credits in real currency. | `kimi`, `deepseek` |
 | **Analytics** | Consumption counters (requests/tokens/neurons/cost) with no remaining-quota value. | `cloudflare` (GraphQL), `9router`, `claude` (local), `pi` (local), `hermes` (local), `opencode` (local, default), `codex` (local, alongside its quota) |
-| **Auth / configured** | Validates credentials with a read-only endpoint when possible; otherwise reports only that a credential is configured and states the limitation. No usage numbers. | `gemini`, `mistral`, `nvidia`, `qwen`, `byteplus`, `groq`, `cohere`, `replicate`, `together`, `minimax`, `xai`, `kilo`, `ai21` |
+| **Auth / configured** | Validates credentials with a read-only endpoint when possible; otherwise reports only that a credential is configured and states the limitation. No usage numbers. | `gemini`, `mistral`, `nvidia`, `qwen`, `byteplus`, `groq`, `cohere`, `replicate`, `together`, `minimax` (PAYG `sk-api-` key), `xai`, `kilo`, `ai21` |
 | **Local runtime** | Local process / installed models. | `ollama`, `vertexai` (gcloud) |
 | **Informational** | No public read-only API at all; the card just links to the dashboard. | `perplexity`, `cursor`, `cline`, `kiro`, `warp`, `amp` |
 
@@ -168,12 +168,12 @@ The matrix below summarises the **authentication/billing surface** for every sup
 </tr>
 <tr>
 <td><code>minimax</code></td>
-<td>Auth</td>
-<td>✅ <code>GET /v1/models</code></td>
-<td>❌ dashboard-only</td>
+<td>Auth + Quota</td>
+<td>✅ <code>GET /v1/models</code> (PAYG)<br>✅ <code>GET /v1/token_plan/remains</code> (Token Plan)</td>
+<td>✅ 5h + weekly (Token Plan keys)</td>
 <td>✅ Token Plan $20/$50/$120/mo</td>
 <td>✅ per token (M3 50% off)</td>
-<td><code>MINIMAX_API_KEY</code></td>
+<td><code>MINIMAX_API_KEY</code> · <code>MINIMAX_TOKEN_PLAN_KEY</code></td>
 <td><a href="https://platform.minimax.io">platform.minimax.io</a></td>
 <td><a href="https://platform.minimax.io/docs/api-reference">platform.minimax.io/docs</a></td>
 </tr>
@@ -577,15 +577,15 @@ Detailed adapter notes for the focus providers (Gemini, Cloudflare, Mistral, GLM
 | | |
 | --- | --- |
 | **API base** | `https://api.minimax.io/v1` (OpenAI-compat); Anthropic-compat `https://api.minimax.io/anthropic`. Legacy TTS host `api.minimax.chat`. No `.cn` host. |
-| **Env var** | `MINIMAX_API_KEY`. Two key types: pay-as-you-go **API Key** vs Token-Plan **Subscription Key** (not interchangeable). |
+| **Env var** | `MINIMAX_TOKEN_PLAN_KEY` (Token Plan Subscription Key, `sk-cp-...`) takes precedence; legacy `MINIMAX_API_KEY` is honoured too. Pay-as-you-go **API Keys** (`sk-api-...`) and Token-Plan **Subscription Keys** (`sk-cp-...`) are not interchangeable. |
 | **Auth** | `Authorization: Bearer <key>`. |
-| **Key check** | `GET /v1/models` → `200` lists `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.5`… Zero tokens. |
-| **Quota / balance** | ❌ None. Dashboard-only. Token-Plan usage shown as a console bar (5-hour rolling + weekly). Errors: `1004` auth failed, `1008` insufficient balance, `1002` rate limit, `1039` token limit exceeded. |
+| **Key check** | **Token Plan** — `GET /v1/token_plan/remains` → `200` returns `model_remains[]` (5h + weekly percent, Unix-ms reset). **PAYG** — `GET /v1/models` → `200` lists `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.5`… Zero tokens. |
+| **Quota / balance** | **Token Plan** — `model_remains[].current_interval_remaining_percent` (5h), `model_remains[].current_weekly_remaining_percent` (7-day), `end_time` / `weekly_end_time` (Unix-ms reset). Window minutes 300 / 10080; the UI keeps the existing `null` label so the localised 5h/weekly header is reused. `current_interval_status == 2` → 100% used; `current_interval_status == 3` with `current_*_total_count == 0` is treated as an unavailable bucket (the model is not part of the plan) and surfaces a provider error rather than fabricating an `Unlimited` card. **PAYG** — dashboard-only; balance at `platform.minimax.io/user-center/payment/balance`. Errors: `1004` auth failed, `1008` insufficient balance, `1002` rate limit, `1039` token limit exceeded. |
 | **Plans** | **Token Plan** (replaces old "Coding Plan"): **Plus $20** / **Max $50** / **Ultra $120**/mo — full-spectrum multimodal, 5h+weekly windows, no rollover. **Credits**: $5/$25/$100 packs (1000cr = $1, 365-day). PAYG also available. |
 | **Billing** | Per 1M tokens: **`MiniMax-M3`** (≤512K, **50% off**) $0.30/$1.20 (cache $0.06) &middot; >512K $0.60/$2.40 &middot; Priority tier 1.5× &middot; `MiniMax-M2.7` $0.30/$1.20 &middot; `MiniMax-M2.7-highspeed` $0.60/$2.40. Audio `speech-2.8-hd` $100/M chars; Hailuo video $0.19–$0.56/clip. |
 | **Dashboard** | [platform.minimax.io](https://platform.minimax.io): keys `/user-center/basic-information/interface-key`, balance `/user-center/payment/balance`, Token Plan `/user-center/payment/token-plan`. |
 | **Changelog** | **2026-06-01 MiniMax-M3** (1M ctx, adaptive thinking, coding SOTA). 2026-03-18 M2.7/M2.7-highspeed. 2026-02 M2.5. 2025-12-22 M2.1. 2025-10-27 M2 + Hailuo-2.3. Token Plan replaced Coding Plan (broader coverage, separate Subscription Key). |
-| **Adapter** | `fetch_minimax_native` — `/v1/models` validation. |
+| **Adapter** | `fetch_minimax_native` — routes to **Token Plan** (`/v1/token_plan/remains`) for `MINIMAX_TOKEN_PLAN_KEY` or `sk-cp-` `MINIMAX_API_KEY`; falls back to **PAYG** (`/v1/models`) for `sk-api-` keys. Token Plan key is **never** used to run paid inference. |
 
 ### Command Code
 

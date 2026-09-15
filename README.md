@@ -88,7 +88,7 @@ Provider cards use one of these honest coverage levels:
 | **Quota** | Returns real rate-limit/spend windows and used percentage (Codex, Copilot, Antigravity, OpenRouter, Z.ai, GLM, Command Code, OpenCode Go). |
 | **Balance** | Returns remaining prepaid balance or credits in real currency (Kimi, DeepSeek). |
 | **Analytics** | Reads consumption counters or provider-owned local data (Cloudflare GraphQL, 9Router, Claude, pi, Hermes). |
-| **Authentication** | Verifies credentials via a read-only endpoint without stable quota data (Gemini, Mistral, MiniMax, Qwen, xAI, and more). Some configured-status cards, such as NVIDIA, cannot validate the key because the provider's catalog is public. |
+| **Authentication** | Verifies credentials via a read-only endpoint without stable quota data (Gemini, Mistral, MiniMax PAYG, Qwen, xAI, and more). Some configured-status cards, such as NVIDIA, cannot validate the key because the provider's catalog is public. |
 | **Local runtime** | Reports local state rather than account quota (Ollama models, Vertex AI authentication). |
 | **Informational** | Links official usage when no read-only API exists (Kiro, Cursor, Warp, and more). |
 
@@ -111,7 +111,9 @@ Notable integrations:
 | Z.ai, GLM | `GET /api/monitor/usage/quota/limit` — real per-window usage %, reset timestamps, and plan tier. Falls back to `/models` auth-only check. |
 | Command Code | Live 5h/weekly/monthly usage via `/alpha/billing/credits`; uses `COMMAND_CODE_API_KEY` or the protected `apiKey` saved by `cmd login` in `~/.commandcode/auth.json`. |
 | OpenCode Go | Live 5h/weekly/monthly usage from `/zen/go/v1/usage`; uses `OPENCODE_API_KEY` or the CLI credential in `${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json`. When the Go plan's balance fallback is enabled, the card says so without claiming a balance amount. |
-| xAI, MiniMax, Qwen, Mistral | Read-only `/models` (or `/api-key`) validation — zero token consumption. |
+| xAI, Qwen, Mistral | Read-only `/models` (or `/api-key`) validation — zero token consumption. |
+| MiniMax PAYG (`sk-api-…`) | Read-only `/v1/models` validation — zero token consumption. |
+| MiniMax Token Plan (`sk-cp-…`) | Live 5h + weekly windows via `/v1/token_plan/remains`; prefer `MINIMAX_TOKEN_PLAN_KEY`, fall back to `MINIMAX_API_KEY` for older configs. |
 | NVIDIA | Configured-key status only; its public model catalog cannot validate the key. |
 | Ollama | Installed and running models from `/api/tags` and `/api/ps`. |
 

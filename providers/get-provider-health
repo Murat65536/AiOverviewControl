@@ -47,7 +47,7 @@ status_for() {
     openrouter) has_any_env OPENROUTER_API_KEY || [ -f "$HOME/.9router/db/data.sqlite" ] || { status="missing"; detail="OPENROUTER_API_KEY or 9Router data"; } ;;
     deepseek) has_any_env DEEPSEEK_API_KEY || { status="missing"; detail="DEEPSEEK_API_KEY"; } ;;
     kimi|moonshot) has_any_env MOONSHOT_API_KEY KIMI_API_KEY KIMI_CODING_API_KEY || { status="missing"; detail="MOONSHOT_API_KEY, KIMI_API_KEY, or KIMI_CODING_API_KEY"; } ;;
-    minimax) has_any_env MINIMAX_API_KEY || { status="missing"; detail="MINIMAX_API_KEY"; } ;;
+    minimax) has_any_env MINIMAX_API_KEY MINIMAX_TOKEN_PLAN_KEY || { status="missing"; detail="MINIMAX_API_KEY or MINIMAX_TOKEN_PLAN_KEY"; } ;;
     commandcode|cmd|cmdcode) has_commandcode_credentials || { status="missing"; detail="COMMAND_CODE_API_KEY or ~/.commandcode/auth.json"; } ;;
     opencode)
       if [ -f "${OPENCODE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/opencode}/opencode.db" ] && [ "${OPENCODE_USAGE_SOURCE:-local}" != api ]; then

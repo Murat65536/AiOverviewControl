@@ -45,7 +45,7 @@ This document records the upstream surface used by each adapter. It was reviewed
 | Cohere | [Cohere API reference](https://docs.cohere.com/reference/about) | Models API validation. |
 | Replicate | [Account endpoint](https://replicate.com/docs/reference/http#account.get) | Token validation and account identity. |
 | xAI (Grok) | [xAI API reference](https://docs.x.ai/) — `GET https://api.x.ai/v1/api-key` | Key validation returning `{name, api_key_blocked, api_key_disabled, team_blocked, acls, ...}`. No remaining-credits field; per-request cost in `usage.cost_in_usd_ticks`. Key: `XAI_API_KEY`. |
-| MiniMax | [MiniMax API reference](https://platform.minimax.io/docs/api-reference) — `GET https://api.minimax.io/v1/models` | Models API validation (lists `MiniMax-M3`, `MiniMax-M2.7`, …). No documented balance API; dashboard at `platform.minimax.io/user-center/payment/balance`. Key: `MINIMAX_API_KEY`. |
+| MiniMax | [MiniMax API reference](https://platform.minimax.io/docs/api-reference) — `GET https://api.minimax.io/v1/token_plan/remains` (Token Plan keys) or `GET https://api.minimax.io/v1/models` (PAYG keys) | **Token Plan** (`sk-cp-…`, env `MINIMAX_TOKEN_PLAN_KEY` or back-compat `MINIMAX_API_KEY`): `model_remains[].current_interval_remaining_percent` (5h) and `model_remains[].current_weekly_remaining_percent` (7d), with `end_time` / `weekly_end_time` Unix-ms resets. **PAYG** (`sk-api-…`, env `MINIMAX_API_KEY`): `/v1/models` validation only — lists `MiniMax-M3`, `MiniMax-M2.7`, …; balance dashboard-only at `platform.minimax.io/user-center/payment/balance`. |
 | Kilo | [Kilo Gateway](https://kilo.ai/docs/gateway) — `GET https://api.kilo.ai/api/gateway/models` | Best-effort models probe. **The endpoint is documented as no-auth**, so a `200` is inconclusive; only a `401` reliably rejects a malformed key. No balance API; `402` on a paid call carries `metadata.buyCreditsUrl`. Key: `KILO_API_KEY`. |
 
 ## No documented read-only quota endpoint
@@ -62,6 +62,7 @@ The surfaces above are exercised locally by the fixture-backed suites in
 bash tests/test-commandcode.sh          # Command Code windows and fallback
 bash tests/test-opencode.sh              # OpenCode Go windows, XDG credentials, and fallback
 bash tests/test-kimi-code.sh            # Kimi Code routing and quota fixture
+bash tests/test-minimax-token-plan.sh   # MiniMax Token Plan vs PAYG routing, exhausted/unavailable/malformed paths
 bash tests/test-antigravity-live.sh     # Antigravity live-request safeguards
 bash tests/test-quota-alert.sh          # quota notification deduplication
 bash tests/test-hermes-analytics.sh     # Hermes telemetry (fixture database)
@@ -74,7 +75,7 @@ your real `~/.cache/AiOverviewControl/usage-history.jsonl` — otherwise running
 the suites locally would draw fixture values (for example Command Code's
 constant 30%) into the dashboard sparklines.
 
-CI runs all seven suites on every push (see `.github/workflows/ci.yml`).
+CI runs all eight suites on every push (see `.github/workflows/ci.yml`).
 
 ## Review policy
 

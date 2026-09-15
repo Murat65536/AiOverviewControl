@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### MiniMax Token Plan subscription quota
+
+MiniMax now reports real 5-hour and weekly window usage when authenticated with a Token Plan Subscription Key (`sk-cp-…`), the same key shape the official MiniMax CLI uses for `/v1/token_plan/remains`. The dedicated env var is `MINIMAX_TOKEN_PLAN_KEY`; an existing `sk-cp-…` value in the legacy `MINIMAX_API_KEY` is still recognised, so older configs continue to report quota without any change. Pay-as-you-go `sk-api-…` keys stay on `/v1/models` (auth-only) — Token Plan keys are never used to make paid inference calls.
+
+The mapping covers both `general` and additional buckets from `model_remains[]`. `current_interval_status == 2` renders as 100% used for the 5h window, and a fully-zero bucket with `status == 3` (model not in the plan) is treated as unavailable rather than fabricated as `Unlimited`, so no card ever claims usage that is not actually part of the plan. Malformed or empty `model_remains` arrays surface a clear provider error instead of an invented 0% line.
+
+The settings row updates the requirement to `API key or Token Plan key`; the readiness helper recognises both env vars and the same key-prefix rule used by the adapter.
+
 ## 1.15.1 - 2026-09-08
 
 ### Codex usage polls no longer spawn overlapping app-servers (#25)
