@@ -43,6 +43,7 @@ case "$url" in
     case "${XAI_BILLING_MODE:-ok}" in
       ok)     [ -n "$out" ] && cp "${XAI_FIXTURE_DIR}/xai-cli-billing-credits.json" "$out"; status=200 ;;
       zero)   [ -n "$out" ] && cp "${XAI_FIXTURE_DIR}/xai-cli-billing-credits-zero.json" "$out"; status=200 ;;
+      monthly) [ -n "$out" ] && cp "${XAI_FIXTURE_DIR}/xai-cli-billing-credits-monthly.json" "$out"; status=200 ;;
       down)   [ -n "$out" ] && printf '' > "$out"; status=500 ;;
       deny)   [ -n "$out" ] && printf '{"error":"Access denied"}' > "$out"; status=403 ;;
       deny_once)
@@ -288,5 +289,45 @@ out="$(PATH="$TMP/bin:$PATH" HDR_LOG="$HDR_LOG" XAI_FIXTURE_DIR="$ROOT/tests/fix
   "$ROOT/providers/get-provider-usage" grok 2>/dev/null)"
 [ "$(jq -r '.[0].provider' <<<"$out")" = "xai" ] || fail "grok alias provider"
 [ "$(jq -r '.[0].source' <<<"$out")" = "grok-cli-billing" ] || fail "grok alias source"
+
+# 15. The proxy timestamp is normalized to whole seconds with a Z suffix,
+# which is the shape every other adapter emits and the widget parses.
+out="$(run env -u XAI_API_KEY -u XAI_MANAGEMENT_KEY -u XAI_MANAGEMENT_API_KEY \
+  HOME="$CLI_HOME" GROK_HOME="$CLI_HOME/.grok" XAI_BILLING_MODE=ok)"
+[ "$(jq -r '.[0].usage.primary.resetsAt' <<<"$out")" = "2026-09-21T18:26:15Z" ] \
+  || fail "resetsAt normalization: $out"
+
+# 16. A monthly period maps to 43200 minutes, an on-demand cap without
+# creditUsagePercent drives the percentage, and a prepaid balance is rendered
+# as money instead of the plan label.
+out="$(run env -u XAI_API_KEY -u XAI_MANAGEMENT_KEY -u XAI_MANAGEMENT_API_KEY \
+  HOME="$CLI_HOME" GROK_HOME="$CLI_HOME/.grok" XAI_BILLING_MODE=monthly)"
+[ "$(jq -r '.[0].usage.primary.windowMinutes' <<<"$out")" = "43200" ] || fail "monthly minutes: $out"
+[ "$(jq -r '.[0].usage.primary.resetDescription' <<<"$out")" = "Monthly" ] || fail "monthly label"
+[ "$(jq -r '.[0].usage.primary.usedPercent' <<<"$out")" = "25" ] || fail "on-demand cap percent"
+[ "$(jq -r '.[0].usage.primary.resetsAt' <<<"$out")" = "2026-10-01T00:00:00Z" ] || fail "monthly resetsAt"
+[ "$(jq -r '.[0].credits.remaining' <<<"$out")" = '$12.50' ] || fail "prepaid credits"
+
+# 17. A failed renewal is not retried on every poll. The second invocation
+# reuses the recorded attempt instead of spawning the CLI again.
+COOLDOWN_HOME="$TMP/cooldown-home"
+write_auth "$COOLDOWN_HOME/.grok/auth.json" "expired_token" "2020-01-01T00:00:00Z" "refresh_test"
+rm -rf "$XDG_CACHE_HOME/AiOverviewControl"
+: > "$GROK_LOG"
+for _ in 1 2; do
+  out="$(run env -u XAI_API_KEY -u XAI_MANAGEMENT_KEY -u XAI_MANAGEMENT_API_KEY \
+    HOME="$COOLDOWN_HOME" GROK_HOME="$COOLDOWN_HOME/.grok" GROK_REFRESH_MODE=fail)"
+done
+[ "$(wc -l < "$GROK_LOG")" -eq 1 ] || fail "refresh cooldown spawned grok twice"
+echo "$(jq -r '.[0].error.message' <<<"$out")" | grep -q 'expired' || fail "cooldown still reports expiry: $out"
+
+# 18. The cooldown is a delay, not a permanent stop: once it lapses the next
+# poll renews and recovers without user action.
+out="$(run env -u XAI_API_KEY -u XAI_MANAGEMENT_KEY -u XAI_MANAGEMENT_API_KEY \
+  HOME="$COOLDOWN_HOME" GROK_HOME="$COOLDOWN_HOME/.grok" XAI_REFRESH_COOLDOWN=0 \
+  GROK_REFRESH_MODE=success GROK_REFRESH_AUTH="$REFRESHED_AUTH" XAI_BILLING_MODE=ok)"
+[ "$(jq -r '.[0].source' <<<"$out")" = "grok-cli-billing" ] || fail "cooldown lapse recovery: $out"
+[ "$(wc -l < "$GROK_LOG")" -eq 2 ] || fail "cooldown lapse refresh count"
+[ ! -f "$XDG_CACHE_HOME/AiOverviewControl/xai-grok-refresh" ] || fail "successful refresh left cooldown stamp"
 
 echo "OK: test-xai"

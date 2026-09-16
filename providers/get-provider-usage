@@ -2477,22 +2477,61 @@ xai_grok_cli_path() {
   return 1
 }
 
+# Renewal attempts are stamped here so repeated polls with a token the CLI
+# cannot renew do not spawn one `grok` process per poll. The widget polls far
+# more often than a token expires, and a failing renewal fails the same way
+# every time (issue #25 taught us this for the Codex app-server).
+xai_refresh_stamp_file() {
+  printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/AiOverviewControl/xai-grok-refresh"
+}
+
+xai_refresh_in_cooldown() {
+  local stamp_file last now
+  stamp_file="$(xai_refresh_stamp_file)"
+  [ -f "$stamp_file" ] || return 1
+  last="$(cat "$stamp_file" 2>/dev/null || printf '')"
+  case "$last" in '' | *[!0-9]*) return 1 ;; esac
+  now="$(date +%s)"
+  [ "$((now - last))" -ge 0 ] && [ "$((now - last))" -lt "${XAI_REFRESH_COOLDOWN:-300}" ]
+}
+
+# Stamp before launching, not after: two polls that overlap must not both
+# decide the coast is clear.
+xai_mark_refresh_attempt() {
+  local stamp_file
+  stamp_file="$(xai_refresh_stamp_file)"
+  mkdir -p "${stamp_file%/*}" 2>/dev/null || return 0
+  date +%s >"$stamp_file" 2>/dev/null || true
+}
+
+xai_clear_refresh_attempt() {
+  rm -f "$(xai_refresh_stamp_file)" 2>/dev/null || true
+}
+
 # Let Grok own OIDC refresh-token rotation and auth.json locking. `grok models`
 # is read-only account metadata, but it initializes the same authenticated
 # client as an agent session and silently renews an expired access token.
 xai_refresh_grok_auth() {
   local previous_auth="${1:-}" grok_cli
+  xai_refresh_in_cooldown && return 1
   grok_cli="$(xai_grok_cli_path)" || return 1
+  xai_mark_refresh_attempt
   timeout 10 "$grok_cli" models >/dev/null 2>&1 </dev/null || true
 
   local refreshed previous_fingerprint refreshed_fingerprint
   refreshed="$(xai_grok_auth_json)"
   [ -n "$refreshed" ] && ! xai_grok_auth_is_expired "$refreshed" || return 1
-  [ -z "$previous_auth" ] && return 0
+  if [ -z "$previous_auth" ]; then
+    xai_clear_refresh_attempt
+    return 0
+  fi
 
   previous_fingerprint="$(printf '%s' "$previous_auth" | jq -c '[.key, .refresh_token, .expires_at]' 2>/dev/null || true)"
   refreshed_fingerprint="$(printf '%s' "$refreshed" | jq -c '[.key, .refresh_token, .expires_at]' 2>/dev/null || true)"
-  [ -n "$refreshed_fingerprint" ] && [ "$refreshed_fingerprint" != "$previous_fingerprint" ]
+  [ -n "$refreshed_fingerprint" ] && [ "$refreshed_fingerprint" != "$previous_fingerprint" ] || return 1
+  # A renewal that worked clears the cooldown: the next expiry is legitimate
+  # and should be renewable immediately.
+  xai_clear_refresh_attempt
 }
 
 xai_grok_has_auth_file() {
@@ -2581,6 +2620,16 @@ fetch_xai_cli_billing() {
       if ($type | test("WEEKLY")) then "Weekly"
       elif ($type | test("MONTHLY")) then "Monthly"
       else "Credits" end;
+    # The proxy returns microsecond precision and a "+00:00" offset
+    # ("2026-09-21T18:26:15.002959+00:00"). Every other adapter emits whole
+    # seconds with a "Z", which is what the Date parsing in the widget expects.
+    # An offset jq cannot parse is passed through untouched rather than lost.
+    def iso($s):
+      if ($s | type) != "string" or $s == "" then null
+      else
+        ($s | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")) as $t
+        | (($t | fromdateiso8601 | todateiso8601)? // $s)
+      end;
     .config as $c |
     ($c.currentPeriod.type // "") as $ptype |
     (
@@ -2605,7 +2654,7 @@ fetch_xai_cli_billing() {
         primary: {
           usedPercent: clamp($pct),
           windowMinutes: period_minutes($ptype),
-          resetsAt: ($c.currentPeriod.end // $c.billingPeriodEnd // null),
+          resetsAt: iso($c.currentPeriod.end // $c.billingPeriodEnd // null),
           resetDescription: period_label($ptype)
         },
         secondary: null,
