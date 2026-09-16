@@ -19,6 +19,8 @@ This document records the upstream surface used by each adapter. It was reviewed
 | Antigravity | Local Antigravity OAuth sessions plus Cloud Code Assist `loadCodeAssist` and `fetchAvailableModels` | Per-account Gemini / Claude & OpenAI quota families and reset times. The integration is fixture-tested and treats the internal endpoint as unstable. |
 | Z.ai / GLM | [Z.ai API reference](https://docs.z.ai/api-reference/introduction) — `GET /api/monitor/usage/quota/limit`; China mirror on `open.bigmodel.cn` | Timed quota windows, percentages, reset timestamps, remaining units, and plan tier. Falls back to `GET /paas/v4/models` when the quota endpoint is unavailable. |
 | Fireworks AI | [List quotas](https://docs.fireworks.ai/api-reference/list-quotas) | `GET /v1/accounts/{account_id}/quotas` when `FIREWORKS_ACCOUNT_ID` is set; otherwise inference-model API validation. |
+| xAI (Grok Build / SuperGrok) | Grok CLI billing — `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` (same surface the official CLI uses after `grok login`) | Weekly or monthly `creditUsagePercent` plus period end from `config.currentPeriod`. An omitted percent on a parseable period is zero usage. Credentials: `~/.grok/auth.json` (or `$GROK_HOME`). Expired OIDC access tokens are renewed by the installed Grok CLI when a refresh token is present. Plan label from `/v1/settings` → `subscription_tier_display`. |
+| xAI (API prepaid) | [Billing Management](https://docs.x.ai/developers/rest-api-reference/management/billing) — `GET https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/balance` | Prepaid ledger in inverted USD cents (`total.val` `"-1250"` → `$12.50`). Requires a Management key (`XAI_MANAGEMENT_KEY` / `XAI_MANAGEMENT_API_KEY`), not an inference key, plus `XAI_TEAM_ID`. |
 
 ## Verified analytics surfaces (consumption counters, not remaining quota)
 
@@ -44,7 +46,7 @@ This document records the upstream surface used by each adapter. It was reviewed
 | Groq | [Models endpoint](https://console.groq.com/docs/api-reference#models) | API-key validation. |
 | Cohere | [Cohere API reference](https://docs.cohere.com/reference/about) | Models API validation. |
 | Replicate | [Account endpoint](https://replicate.com/docs/reference/http#account.get) | Token validation and account identity. |
-| xAI (Grok) | [xAI API reference](https://docs.x.ai/) — `GET https://api.x.ai/v1/api-key` | Key validation returning `{name, api_key_blocked, api_key_disabled, team_blocked, acls, ...}`. No remaining-credits field; per-request cost in `usage.cost_in_usd_ticks`. Key: `XAI_API_KEY`. |
+| xAI (Grok) | [xAI API reference](https://docs.x.ai/) — `GET https://api.x.ai/v1/api-key` | Inference-key validation returning `{name, api_key_blocked, api_key_disabled, team_blocked, acls, ...}`. No remaining-credits field on this endpoint. Key: `XAI_API_KEY`. |
 | MiniMax | [MiniMax API reference](https://platform.minimax.io/docs/api-reference) — `GET https://api.minimax.io/v1/token_plan/remains` (Token Plan keys) or `GET https://api.minimax.io/v1/models` (PAYG keys) | **Token Plan** (`sk-cp-…`, env `MINIMAX_TOKEN_PLAN_KEY` or back-compat `MINIMAX_API_KEY`): `model_remains[].current_interval_remaining_percent` (5h) and `model_remains[].current_weekly_remaining_percent` (7d), with `end_time` / `weekly_end_time` Unix-ms resets. **PAYG** (`sk-api-…`, env `MINIMAX_API_KEY`): `/v1/models` validation only — lists `MiniMax-M3`, `MiniMax-M2.7`, …; balance dashboard-only at `platform.minimax.io/user-center/payment/balance`. |
 | Kilo | [Kilo Gateway](https://kilo.ai/docs/gateway) — `GET https://api.kilo.ai/api/gateway/models` | Best-effort models probe. **The endpoint is documented as no-auth**, so a `200` is inconclusive; only a `401` reliably rejects a malformed key. No balance API; `402` on a paid call carries `metadata.buyCreditsUrl`. Key: `KILO_API_KEY`. |
 
@@ -60,6 +62,7 @@ The surfaces above are exercised locally by the fixture-backed suites in
 ```bash
 ./providers/get-provider-health "codex,claude,copilot" | jq .
 bash tests/test-commandcode.sh          # Command Code windows and fallback
+bash tests/test-xai.sh                  # xAI grok login billing, Management API, API-key fallback
 bash tests/test-opencode.sh              # OpenCode Go windows, XDG credentials, and fallback
 bash tests/test-kimi-code.sh            # Kimi Code routing and quota fixture
 bash tests/test-minimax-token-plan.sh   # MiniMax Token Plan vs PAYG routing, exhausted/unavailable/malformed paths
@@ -75,7 +78,7 @@ your real `~/.cache/AiOverviewControl/usage-history.jsonl` — otherwise running
 the suites locally would draw fixture values (for example Command Code's
 constant 30%) into the dashboard sparklines.
 
-CI runs all eight suites on every push (see `.github/workflows/ci.yml`).
+CI runs all ten suites on every push (see `.github/workflows/ci.yml`).
 
 ## Review policy
 

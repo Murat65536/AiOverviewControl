@@ -284,7 +284,7 @@ PluginSettings {
         { id:"cohere", name:"Cohere", icon:"waves", mode:"telemetry", requirement:"API key", envVar:"COHERE_API_KEY", note:"Official models API authentication check" },
         { id:"replicate", name:"Replicate", icon:"content_copy", mode:"telemetry", requirement:"API token", envVar:"REPLICATE_API_TOKEN", note:"Official account API authentication check" },
         { id:"fireworks", name:"Fireworks AI", icon:"local_fire_department", mode:"telemetry", requirement:"API key", envVar:"FIREWORKS_API_KEY", note:"API-key validation; FIREWORKS_ACCOUNT_ID enables account quotas" },
-        { id:"xai", name:"xAI (Grok)", icon:"bolt", mode:"telemetry", requirement:"API key", envVar:"XAI_API_KEY", note:"Official /v1/api-key authentication check" },
+        { id:"xai", name:"xAI (Grok)", icon:"bolt", mode:"telemetry", requirement:"grok login or API key", envVar:"XAI_API_KEY", note:"Prefers grok login (~/.grok/auth.json) for SuperGrok weekly usage. XAI_API_KEY validates inference keys. Prepaid API credits need XAI_MANAGEMENT_KEY and XAI_TEAM_ID." },
         { id:"kilo", name:"Kilo", icon:"straighten", mode:"telemetry", requirement:"API key", envVar:"KILO_API_KEY", note:"Configured-key status; the no-auth models endpoint is only a best-effort probe" },
         { id:"ai21", name:"AI21", icon:"looks_21", mode:"telemetry", requirement:"API key", envVar:"AI21_API_KEY", note:"Configured status; no documented read-only usage API" },
         { id:"perplexity", name:"Perplexity", icon:"auto_awesome", mode:"informational", requirement:"none", envVar:"", note:"No public read-only quota API" },
