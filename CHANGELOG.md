@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.16.0 - 2026-09-15
 
 ### xAI (Grok) usage from grok login and the Management API (#28)
 
