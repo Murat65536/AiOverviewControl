@@ -1,0 +1,11 @@
+{
+  "model_remains": [
+    {
+      "model_name": "general"
+    }
+  ],
+  "base_resp": {
+    "status_code": 0,
+    "status_msg": "success"
+  }
+}

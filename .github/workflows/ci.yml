@@ -531,6 +531,8 @@ jobs:
 
       - name: Integration test — xAI Grok CLI billing and Management API
         run: tests/test-xai.sh
+      - name: Integration test — MiniMax Token Plan routing and quota fixtures
+        run: tests/test-minimax-token-plan.sh
 
       - name: Integration test — quota notification deduplication
         run: tests/test-quota-alert.sh
