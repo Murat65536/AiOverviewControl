@@ -1,0 +1,46 @@
+name: Contributors
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Contributions can land without a push to main (a merge commit authored by
+    # someone else), so refresh weekly as well.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  avatars:
+    name: Refresh contributor avatars
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Rewrites the avatar row between the CONTRIBUTORS markers in README.md
+      # and docs/README.pt-BR.md. Avatars only: the names, commit counts and
+      # thank-you copy that this list used to carry went stale on every merge.
+      - name: Render avatar grid
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/render-contributors
+
+      - name: Commit when the grid changed
+        run: |
+          if git diff --quiet -- README.md docs/README.pt-BR.md; then
+            echo "Contributor avatars already up to date."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore(readme): refresh contributor avatars' -- README.md docs/README.pt-BR.md
+          git push

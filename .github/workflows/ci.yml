@@ -189,6 +189,7 @@ jobs:
           find providers -maxdepth 1 -type f -print0 | xargs -0 bash -n
           find tests -maxdepth 1 -name '*.sh' -type f -print0 | xargs -0 bash -n
           bash -n scripts/package-release
+          bash -n scripts/render-contributors
 
       - name: Confirm all scripts are executable
         run: |
@@ -205,10 +206,12 @@ jobs:
               FAIL=1
             fi
           done < <(find tests -maxdepth 1 -name '*.sh' -type f -print0)
-          if [ ! -x scripts/package-release ]; then
-            echo "::error::Not executable: scripts/package-release"
-            FAIL=1
-          fi
+          for f in scripts/package-release scripts/render-contributors; do
+            if [ ! -x "$f" ]; then
+              echo "::error::Not executable: ${f}"
+              FAIL=1
+            fi
+          done
           exit "$FAIL"
 
       - name: Install shellcheck (verified checksum)
@@ -222,7 +225,7 @@ jobs:
           /tmp/shellcheck --version
 
       - name: shellcheck — all provider, test, and packaging scripts (warning level)
-        run: /tmp/shellcheck -S warning providers/* tests/*.sh scripts/package-release
+        run: /tmp/shellcheck -S warning providers/* tests/*.sh scripts/package-release scripts/render-contributors
 
       - name: Provider dispatch coverage
         run: |
