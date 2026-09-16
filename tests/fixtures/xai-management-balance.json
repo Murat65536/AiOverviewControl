@@ -1,0 +1,11 @@
+{
+  "changes": [
+    {
+      "teamId": "65c1e471-205f-4566-9c5a-07198bcdf4ce",
+      "changeOrigin": "PURCHASE",
+      "topupStatus": "SUCCEEDED",
+      "amount": { "val": "-1250" }
+    }
+  ],
+  "total": { "val": "-1250" }
+}
