@@ -709,7 +709,7 @@ fetch_antigravity_native() {
   # Match the quota path used by 9Router and the Cloud Code Assist client.
   # The `daily` host accepts the request too, but may return a generic quota
   # view. Keep the base URL override for future Antigravity builds.
-  local endpoint="${ANTIGRAVITY_API_BASE_URL:-https://cloudcode-pa.googleapis.com}"
+  local endpoint="${ANTIGRAVITY_API_BASE_URL:-https://daily-cloudcode-pa.googleapis.com}"
   local quota_method="${ANTIGRAVITY_QUOTA_METHOD:-v1internal:fetchAvailableModels}"
   local response_file="${ANTIGRAVITY_RESPONSE_FILE:-}"
   local user_agent="${ANTIGRAVITY_USER_AGENT:-antigravity/ide/2.1.1 darwin/arm64}"
