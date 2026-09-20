@@ -828,64 +828,79 @@ fetch_antigravity_native() {
       done
     fi
 
-    # Desktop keyring (agy CLI) as an extra source, if it carries a fresh session.
+    # Desktop keyring or CLI file storage (agy CLI) as an extra source.
     # When ANTIGRAVITY_STATE_DB is explicitly set, it pins discovery to that DB
     # for deterministic tests and targeted debugging, so do not fall through to
     # unrelated local keyring credentials.
-    if [ -z "${ANTIGRAVITY_STATE_DB:-}" ] && command -v secret-tool >/dev/null 2>&1; then
-      local keyring_payload service
-      for service in "gemini" "${ANTIGRAVITY_KEYRING_SERVICE:-Antigravity CLI}" "antigravity-cli" "Antigravity"; do
-        if [ "$service" = "gemini" ]; then
-          keyring_payload="$(timeout 3 secret-tool lookup service gemini username antigravity 2>/dev/null || true)"
-        else
-          keyring_payload="$(timeout 3 secret-tool lookup service "$service" 2>/dev/null || true)"
-        fi
-        [ -n "$keyring_payload" ] || continue
+    if [ -z "${ANTIGRAVITY_STATE_DB:-}" ]; then
+      local keyring_payload="" service="" source_label="CLI keyring"
+      if command -v secret-tool >/dev/null 2>&1; then
+        for service in "gemini" "${ANTIGRAVITY_KEYRING_SERVICE:-Antigravity CLI}" "antigravity-cli" "Antigravity"; do
+          if [ "$service" = "gemini" ]; then
+            keyring_payload="$(timeout 3 secret-tool lookup service gemini username antigravity 2>/dev/null || true)"
+          else
+            keyring_payload="$(timeout 3 secret-tool lookup service "$service" 2>/dev/null || true)"
+          fi
+          [ -n "$keyring_payload" ] && break
+        done
+      fi
+      if [ -z "$keyring_payload" ]; then
+        for token_file in "${HOME}/.gemini/antigravity-cli/antigravity-oauth-token" \
+                          "${XDG_CONFIG_HOME:-$HOME/.config}/antigravity-cli/antigravity-oauth-token"; do
+          if [ -r "$token_file" ]; then
+            keyring_payload="$(cat "$token_file" 2>/dev/null || true)"
+            [ -n "$keyring_payload" ] && { source_label="CLI file"; break; }
+          fi
+        done
+      fi
+      if [ -n "$keyring_payload" ]; then
         rt="$(printf '%s' "$keyring_payload" | extract_antigravity_keyring_refresh)"
-        [ -n "$rt" ] || continue
-        : > "$request_error_file"
-        if ! refreshed="$(antigravity_refresh_access_token "$rt" 2>"$request_error_file")"; then
-          antigravity_append_account_error "$account_errors_file" "CLI keyring" "Account unavailable" "oauth-refresh" \
-            "$(cut -f1 "$request_error_file")" "$(cut -f2- "$request_error_file")"
-          continue
+        if [ -n "$rt" ]; then
+          : > "$request_error_file"
+          if ! refreshed="$(antigravity_refresh_access_token "$rt" 2>"$request_error_file")"; then
+            antigravity_append_account_error "$account_errors_file" "$source_label" "Account unavailable" "oauth-refresh" \
+              "$(cut -f1 "$request_error_file")" "$(cut -f2- "$request_error_file")"
+          else
+            at="$(printf '%s' "$refreshed" | cut -f1)"
+            email="$(antigravity_email_from_idtoken "$(printf '%s' "$refreshed" | cut -f2)")"
+            [ -n "$email" ] || email="Antigravity CLI"
+            case "$seen_emails" in *" $email "*) : ;; *)
+              seen_emails="$seen_emails$email "
+              : > "$tmp_body"
+              : > "$request_error_file"
+              if ! quota_body="$(antigravity_quota_request_body "$at" "$endpoint" "$user_agent" "$platform" 2>"$request_error_file")"; then
+                antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "loadCodeAssist" \
+                  "$(cut -f1 "$request_error_file")" "$(cut -f2- "$request_error_file")"
+              else
+                keyring_curl_status=0
+                keyring_http_status="$(curl -sS --max-time 12 \
+                    --config <(printf 'header = "Authorization: Bearer %s"\n' "$at") \
+                    -o "$tmp_body" -w '%{http_code}' -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "User-Agent: ${user_agent}" \
+                    -H "X-Client-Name: antigravity" \
+                    -H "X-Client-Version: 2.1.1" \
+                    -H "X-Goog-Api-Client: google-cloud-sdk vscode_cloudshelleditor/0.1" \
+                    -d "$quota_body" \
+                    "$endpoint/$quota_method" 2>/dev/null)" || keyring_curl_status=$?
+                if [ "$keyring_curl_status" -ne 0 ]; then
+                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "fetchAvailableModels" 1 \
+                    "Antigravity fetchAvailableModels request could not reach Google."
+                elif [ "$keyring_http_status" != "200" ]; then
+                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "fetchAvailableModels" "$keyring_http_status" \
+                    "$(antigravity_http_error_message fetchAvailableModels "$keyring_http_status" "$tmp_body")"
+                elif ! jq -e '(.models | type) == "object"' "$tmp_body" >/dev/null 2>&1; then
+                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "fetchAvailableModels" 1 \
+                    "Antigravity fetchAvailableModels response schema changed: models object is missing."
+                else
+                  antigravity_models_account_json "$source_label" "$email" "CLI OAuth (refreshed)" < "$tmp_body" >> "$accounts_file"
+                fi
+              fi
+              ;;
+            esac
+          fi
         fi
-        at="$(printf '%s' "$refreshed" | cut -f1)"
-        email="$(antigravity_email_from_idtoken "$(printf '%s' "$refreshed" | cut -f2)")"
-        [ -n "$email" ] || email="Antigravity CLI"
-        case "$seen_emails" in *" $email "*) continue ;; esac
-        seen_emails="$seen_emails$email "
-        : > "$tmp_body"
-        : > "$request_error_file"
-        if ! quota_body="$(antigravity_quota_request_body "$at" "$endpoint" "$user_agent" "$platform" 2>"$request_error_file")"; then
-          antigravity_append_account_error "$account_errors_file" "CLI keyring" "$email" "loadCodeAssist" \
-            "$(cut -f1 "$request_error_file")" "$(cut -f2- "$request_error_file")"
-          continue
-        fi
-        keyring_curl_status=0
-        keyring_http_status="$(curl -sS --max-time 12 \
-            --config <(printf 'header = "Authorization: Bearer %s"\n' "$at") \
-            -o "$tmp_body" -w '%{http_code}' -X POST \
-            -H "Content-Type: application/json" \
-            -H "User-Agent: ${user_agent}" \
-            -H "X-Client-Name: antigravity" \
-            -H "X-Client-Version: 2.1.1" \
-            -H "X-Goog-Api-Client: google-cloud-sdk vscode_cloudshelleditor/0.1" \
-            -d "$quota_body" \
-            "$endpoint/$quota_method" 2>/dev/null)" || keyring_curl_status=$?
-        if [ "$keyring_curl_status" -ne 0 ]; then
-          antigravity_append_account_error "$account_errors_file" "CLI keyring" "$email" "fetchAvailableModels" 1 \
-            "Antigravity fetchAvailableModels request could not reach Google."
-        elif [ "$keyring_http_status" != "200" ]; then
-          antigravity_append_account_error "$account_errors_file" "CLI keyring" "$email" "fetchAvailableModels" "$keyring_http_status" \
-            "$(antigravity_http_error_message fetchAvailableModels "$keyring_http_status" "$tmp_body")"
-        elif ! jq -e '(.models | type) == "object"' "$tmp_body" >/dev/null 2>&1; then
-          antigravity_append_account_error "$account_errors_file" "CLI keyring" "$email" "fetchAvailableModels" 1 \
-            "Antigravity fetchAvailableModels response schema changed: models object is missing."
-        else
-          antigravity_models_account_json "CLI keyring" "$email" "CLI keyring OAuth (refreshed)" < "$tmp_body" >> "$accounts_file"
-        fi
-        break
-      done
+      fi
     fi
   fi
 

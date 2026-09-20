@@ -182,4 +182,26 @@ printf '%s' "$PARTIAL" | jq -e '
   and .[0].accountErrors[0].code == 429
 ' >/dev/null
 
+# 6. Verify agy CLI token file fallback when secret-tool and IDE DB are not present
+CLI_TOKEN_DIR="$TMP_ROOT/.gemini/antigravity-cli"
+mkdir -p "$CLI_TOKEN_DIR"
+cat > "$CLI_TOKEN_DIR/antigravity-oauth-token" <<EOF
+{"token":{"access_token":"access-three","refresh_token":"$REFRESH_TWO"}}
+EOF
+rm -f "$DB" "$FAKE_BIN/secret-tool" "$FAKE_BIN/sqlite3"
+FILE_FALLBACK="$(HOME="$TMP_ROOT" run_adapter)"
+printf '%s' "$FILE_FALLBACK" | jq -e '
+  .[0].provider == "antigravity"
+  and .[0].error == null
+  and (.[0].accounts | length) == 1
+  and .[0].accounts[0].install == "CLI file"
+  and .[0].accounts[0].email == "two@example.invalid"
+' >/dev/null
+
+HEALTH_FALLBACK="$(HOME="$TMP_ROOT" PATH="$FAKE_BIN:$PATH" "$ROOT/providers/get-provider-health" antigravity)"
+printf '%s' "$HEALTH_FALLBACK" | jq -e '
+  .[0].provider == "antigravity"
+  and .[0].status == "ready"
+' >/dev/null
+
 echo "Antigravity live safeguards: OK"
