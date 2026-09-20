@@ -534,32 +534,54 @@ antigravity_account_json() {
   jq -c --arg install "$1" --arg email "$2" --arg login "$3" '
     def clamp: if type != "number" then 0 elif . < 0 then 0 elif . > 1 then 1 else . end;
     def fam: (.displayName // .bucketId // "Model") | gsub("\\s*\\([^)]*\\)\\s*$"; "");
-    # Flatten buckets across groups; keep API order as a tie-break rank so the
-    # models Antigravity lists first (Gemini for a Google plan) lead on ties.
-    ([.groups[]?.buckets[]?] | to_entries
-      | map(.key as $i | {
-          name:(.value | fam),
-          rem:(.value.remainingFraction | clamp),
-          reset:(.value.resetTime // null),
-          desc:(.value.description // null),
-          idx:$i
-        })) as $rows
-    | ($rows
-        | group_by(.name)
-        | map({
-            name: .[0].name,
-            rem:  (map(.rem) | min),
-            reset:(map(.reset | select(. != null)) | sort | first // null),
-            desc: (map(.desc | select(. != null)) | first // null),
-            idx:  (map(.idx) | min)
-          })
-        | sort_by([.rem, .idx])) as $fams
-    | {
-        install: $install,
-        email: $email,
-        loginMethod: $login,
-        groupDescription: (.groups[0].description // .description // null),
-        windows: ($fams | map({
+    def group_label($g):
+      ($g.displayName // "Models") as $raw
+      | if ($raw | test("gemini"; "i")) then "Gemini"
+        elif ($raw | test("claude|gpt|3p"; "i")) then "Claude & GPT"
+        else $raw end;
+
+    if ([.groups[]?.buckets[]? | select(.window != null or ((.bucketId // "") | test("5h|weekly")))] | length) > 0 then
+      [
+        .groups[]? as $g
+        | group_label($g) as $gl
+        | $g.buckets[]?
+        | (.window // (if (.bucketId // "") | test("5h") then "5h" else "weekly" end)) as $w
+        | (if $w == "5h" then 300 else 10080 end) as $mins
+        | (if $w == "5h" then "5h" else "Weekly" end) as $wlabel
+        | ($gl + " (" + $wlabel + ")") as $name
+        | (.remainingFraction | clamp) as $rem
+        | {
+            name: $name,
+            group: ($g.displayName // $gl),
+            window: $w,
+            windowMinutes: $mins,
+            usedPercent: (((1 - $rem) * 10000 | round) / 100),
+            resetsAt: (.resetTime // null),
+            resetDescription: $name,
+            description: (.description // null),
+            displayValue: null
+          }
+      ]
+    else
+      ([.groups[]?.buckets[]?] | to_entries
+        | map(.key as $i | {
+            name:(.value | fam),
+            rem:(.value.remainingFraction | clamp),
+            reset:(.value.resetTime // null),
+            desc:(.value.description // null),
+            idx:$i
+          })) as $rows
+      | ($rows
+          | group_by(.name)
+          | map({
+              name: .[0].name,
+              rem: (map(.rem) | min),
+              reset:(map(.reset | select(. != null)) | sort | first // null),
+              desc: (map(.desc | select(. != null)) | first // null),
+              idx: (map(.idx) | min)
+            })
+          | sort_by([.rem, .idx])) as $fams
+      | ($fams | map({
           name: .name,
           usedPercent: (((1 - .rem) * 10000 | round) / 100),
           windowMinutes: null,
@@ -567,7 +589,14 @@ antigravity_account_json() {
           resetDescription: .name,
           description: .desc,
           displayValue: (((1 - .rem) * 100 | round | tostring) + "% used")
-        })),
+        }))
+    end as $windows
+    | {
+        install: $install,
+        email: $email,
+        loginMethod: $login,
+        groupDescription: (.groups[0].description // .description // null),
+        windows: $windows,
         updatedAt: (now | todateiso8601)
       }'
 }
@@ -710,7 +739,7 @@ fetch_antigravity_native() {
   # The `daily` host accepts the request too, but may return a generic quota
   # view. Keep the base URL override for future Antigravity builds.
   local endpoint="${ANTIGRAVITY_API_BASE_URL:-https://daily-cloudcode-pa.googleapis.com}"
-  local quota_method="${ANTIGRAVITY_QUOTA_METHOD:-v1internal:fetchAvailableModels}"
+  local quota_method="${ANTIGRAVITY_QUOTA_METHOD:-v1internal:retrieveUserQuotaSummary}"
   local response_file="${ANTIGRAVITY_RESPONSE_FILE:-}"
   local user_agent="${ANTIGRAVITY_USER_AGENT:-antigravity/ide/2.1.1 darwin/arm64}"
   local platform="${ANTIGRAVITY_PLATFORM:-3}"
@@ -814,16 +843,18 @@ fetch_antigravity_native() {
             -d "$quota_body" \
             "$endpoint/$quota_method" 2>/dev/null)" || curl_status=$?
         if [ "$curl_status" -ne 0 ]; then
-          antigravity_append_account_error "$account_errors_file" "$install" "$email" "fetchAvailableModels" 1 \
-            "Antigravity fetchAvailableModels request could not reach Google."
+          antigravity_append_account_error "$account_errors_file" "$install" "$email" "$quota_method" 1 \
+            "Antigravity $quota_method request could not reach Google."
         elif [ "$http_status" != "200" ]; then
-          antigravity_append_account_error "$account_errors_file" "$install" "$email" "fetchAvailableModels" "$http_status" \
-            "$(antigravity_http_error_message fetchAvailableModels "$http_status" "$tmp_body")"
-        elif ! jq -e '(.models | type) == "object"' "$tmp_body" >/dev/null 2>&1; then
-          antigravity_append_account_error "$account_errors_file" "$install" "$email" "fetchAvailableModels" 1 \
-            "Antigravity fetchAvailableModels response schema changed: models object is missing."
-        else
+          antigravity_append_account_error "$account_errors_file" "$install" "$email" "$quota_method" "$http_status" \
+            "$(antigravity_http_error_message "$quota_method" "$http_status" "$tmp_body")"
+        elif jq -e '(.groups | type) == "array"' "$tmp_body" >/dev/null 2>&1; then
+          antigravity_account_json "$install" "$email" "IDE session OAuth (refreshed)" < "$tmp_body" >> "$accounts_file"
+        elif jq -e '(.models | type) == "object"' "$tmp_body" >/dev/null 2>&1; then
           antigravity_models_account_json "$install" "$email" "IDE session OAuth (refreshed)" < "$tmp_body" >> "$accounts_file"
+        else
+          antigravity_append_account_error "$account_errors_file" "$install" "$email" "$quota_method" 1 \
+            "Antigravity $quota_method response schema changed: groups or models object is missing."
         fi
       done
     fi
@@ -884,16 +915,18 @@ fetch_antigravity_native() {
                     -d "$quota_body" \
                     "$endpoint/$quota_method" 2>/dev/null)" || keyring_curl_status=$?
                 if [ "$keyring_curl_status" -ne 0 ]; then
-                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "fetchAvailableModels" 1 \
-                    "Antigravity fetchAvailableModels request could not reach Google."
+                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "$quota_method" 1 \
+                    "Antigravity $quota_method request could not reach Google."
                 elif [ "$keyring_http_status" != "200" ]; then
-                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "fetchAvailableModels" "$keyring_http_status" \
-                    "$(antigravity_http_error_message fetchAvailableModels "$keyring_http_status" "$tmp_body")"
-                elif ! jq -e '(.models | type) == "object"' "$tmp_body" >/dev/null 2>&1; then
-                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "fetchAvailableModels" 1 \
-                    "Antigravity fetchAvailableModels response schema changed: models object is missing."
-                else
+                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "$quota_method" "$keyring_http_status" \
+                    "$(antigravity_http_error_message "$quota_method" "$keyring_http_status" "$tmp_body")"
+                elif jq -e '(.groups | type) == "array"' "$tmp_body" >/dev/null 2>&1; then
+                  antigravity_account_json "$source_label" "$email" "CLI OAuth (refreshed)" < "$tmp_body" >> "$accounts_file"
+                elif jq -e '(.models | type) == "object"' "$tmp_body" >/dev/null 2>&1; then
                   antigravity_models_account_json "$source_label" "$email" "CLI OAuth (refreshed)" < "$tmp_body" >> "$accounts_file"
+                else
+                  antigravity_append_account_error "$account_errors_file" "$source_label" "$email" "$quota_method" 1 \
+                    "Antigravity $quota_method response schema changed: groups or models object is missing."
                 fi
               fi
               ;;

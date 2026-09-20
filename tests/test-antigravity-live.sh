@@ -88,7 +88,7 @@ case "$url" in
         ;;
     esac
     ;;
-  */v1internal:fetchAvailableModels)
+  */v1internal:retrieveUserQuotaSummary|*/v1internal:fetchAvailableModels)
     count=0
     [ ! -f "$FAKE_FETCH_COUNT_FILE" ] || count="$(cat "$FAKE_FETCH_COUNT_FILE")"
     count=$((count + 1))
@@ -158,7 +158,7 @@ rm -f "$FAKE_FETCH_COUNT_FILE"
 RATE_LIMITED="$(FAKE_FETCH_MODE=rate ANTIGRAVITY_STATE_DB="$DB" run_adapter)"
 printf '%s' "$RATE_LIMITED" | jq -e '
   .[0].error.code == 429
-  and .[0].accountErrors[0].stage == "fetchAvailableModels"
+  and (.[0].accountErrors[0].stage | test("retrieveUserQuotaSummary|fetchAvailableModels"))
 ' >/dev/null
 
 : > "$FAKE_CURL_LOG"
@@ -180,6 +180,7 @@ printf '%s' "$PARTIAL" | jq -e '
   and (.[0].accountErrors | length) == 1
   and .[0].accountErrors[0].email == "two@example.invalid"
   and .[0].accountErrors[0].code == 429
+  and (.[0].accountErrors[0].stage | test("retrieveUserQuotaSummary|fetchAvailableModels"))
 ' >/dev/null
 
 # 6. Verify agy CLI token file fallback when secret-tool and IDE DB are not present
