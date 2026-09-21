@@ -16,6 +16,18 @@ has_commandcode_credentials() {
     && jq -e '(.apiKey | type) == "string" and (.apiKey | length) > 0' "$auth_file" >/dev/null 2>&1
 }
 
+has_antigravity_file_credentials() {
+  local token_file
+  for token_file in \
+      "${HOME}/.gemini/antigravity-cli/antigravity-oauth-token" \
+      "${XDG_CONFIG_HOME:-$HOME/.config}/antigravity-cli/antigravity-oauth-token"; do
+    [ -r "$token_file" ] || continue
+    jq -e '(.token.refresh_token | type) == "string" and (.token.refresh_token | length) > 0' \
+      "$token_file" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
 has_opencode_credentials() {
   # Match the CLI's XDG data directory on Linux DMS sessions.
   local auth_file="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
@@ -72,18 +84,18 @@ status_for() {
     copilot) command -v gh >/dev/null 2>&1 || has_any_env COPILOT_GITHUB_TOKEN GH_TOKEN GITHUB_TOKEN || { status="missing"; detail="gh CLI or GitHub token"; } ;;
     gemini) command -v gemini >/dev/null 2>&1 || has_any_env GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_GENERATIVE_AI_API_KEY || { status="missing"; detail="gemini CLI or API key"; } ;;
     antigravity|agy)
-      if [ -r "${HOME}/.gemini/antigravity-cli/antigravity-oauth-token" ] \
-        || [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/antigravity-cli/antigravity-oauth-token" ] \
-        || [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/Antigravity IDE/User/globalStorage/state.vscdb" ] \
-        || [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/Antigravity/User/globalStorage/state.vscdb" ]; then
+      if has_antigravity_file_credentials \
+        || command -v secret-tool >/dev/null 2>&1; then
         status="ready"
         detail="Configured"
-      elif command -v secret-tool >/dev/null 2>&1; then
+      elif { [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/Antigravity IDE/User/globalStorage/state.vscdb" ] \
+          || [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/Antigravity/User/globalStorage/state.vscdb" ]; } \
+          && command -v sqlite3 >/dev/null 2>&1; then
         status="ready"
         detail="Configured"
       else
         status="missing"
-        detail="CLI keyring, token file, or IDE state"
+        detail="CLI keyring, valid token file, or IDE state with sqlite3"
       fi
       ;;
     9router) [ -f "$HOME/.9router/db/data.sqlite" ] || [ -f "$HOME/.9router/usage.json" ] || { status="missing"; detail="9Router usage database"; } ;;
